@@ -1,13 +1,13 @@
 struct etherbone_record {
     union {
-        uint16_t base_write_addr;
-        uint16_t base_ret_addr;
+        uint32_t base_write_addr;
+        uint32_t base_ret_addr;
     };
     union {
-        uint16_t write_value;
-        uint16_t read_addr;
+        uint32_t write_value;
+        uint32_t read_addr;
     };
-};
+} __attribute__((packed));
 
 struct etherbone_record_header {
     unsigned int bca: 1;
@@ -21,7 +21,7 @@ struct etherbone_record_header {
     unsigned char byte_enable;
     unsigned char wcount;
     unsigned char rcount;
-} __attribute__((packed, aligned(8)));
+} __attribute__((packed));
 
 struct etherbone_packet {
     uint16_t magic;
@@ -32,7 +32,8 @@ struct etherbone_packet {
     unsigned int pf: 1;
     unsigned int addr_size: 4;
     unsigned int port_size: 4;
+    uint32_t padding;
 
     struct etherbone_record_header record_hdr;
     struct etherbone_record record;
-} __attribute__((packed, aligned(4)));
+} __attribute__((packed, aligned(8)));

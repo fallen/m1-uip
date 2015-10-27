@@ -16,6 +16,7 @@
 #include "etherbone.h"
 
 //#define UIP_DEBUG
+#define ETHERBONE_DEBUG
 
 #define UIP_TCP_SERVER_PORT0 80
 #define UIP_TCP_BUFFER_SIZE_RX 400 /* XXX */
@@ -23,7 +24,7 @@
 
 #define BYTES_ACCESS_1  0x1
 #define BYTES_ACCESS_2  0x3
-#define BYTES_ACCESS_4  0x7
+#define BYTES_ACCESS_4  0xf
 
 static int uip_periodic_event;
 static int uip_periodic_period;
@@ -38,19 +39,30 @@ static uint8_t uip_tcp_tx_buf0[UIP_TCP_BUFFER_SIZE_TX];
 static const unsigned char macadr[6] = {0x10, 0xe2, 0xd5, 0x00, 0x00, 0x00};
 static const unsigned char ipadr[4] = {192, 168, 24, 142};
 
+#ifdef ETHERBONE_DEBUG
+	#define print_debug(...) printf(__VA_ARGS__)
+#else
+	#define print_debug(...) {}
+#endif
+
 static void do_wishbone_write(unsigned int addr, unsigned int value, unsigned int width)
 {
-	if(width & BYTES_ACCESS_4)
+	print_debug("writing addr: 0x%08X\n", addr);
+	print_debug("value: 0x%08X\n", value);
+	if((width & BYTES_ACCESS_4) == BYTES_ACCESS_4)
 	{
 		unsigned int *addr_p = (unsigned int *)addr;
+		print_debug("32-bit access\n");
 		*addr_p = value;
-	} else if(width & BYTES_ACCESS_2)
+	} else if((width & BYTES_ACCESS_2) == BYTES_ACCESS_2)
 	{
 		uint16_t *addr_p = (uint16_t *)addr;
+		print_debug("16-bit access\n");
 		*addr_p = value;
-	} else if(width & BYTES_ACCESS_1)
+	} else if((width & BYTES_ACCESS_1) == BYTES_ACCESS_1)
 	{
 		unsigned char *addr_p = (unsigned char *)addr;
+		print_debug("8-bit access\n");
 		*addr_p = value;
 	} else
 	{
@@ -61,21 +73,25 @@ static void do_wishbone_write(unsigned int addr, unsigned int value, unsigned in
 static unsigned int do_wishbone_read(unsigned int addr, unsigned int width)
 {
 	unsigned int value;
-
-	if(width & BYTES_ACCESS_4)
+	print_debug("reading addr: 0x%08X\n", addr);
+	if((width & BYTES_ACCESS_4) == BYTES_ACCESS_4)
 	{
 		unsigned int *addr_p = (unsigned int *)addr;
+		print_debug("32-bit access\n");
 		value = *addr_p;
-	} else if(width & BYTES_ACCESS_2)
+	} else if((width & BYTES_ACCESS_2) == BYTES_ACCESS_2)
 	{
 		uint16_t *addr_p = (uint16_t *)addr;
+		print_debug("16-bit access\n");
 		value = *addr_p;
-	} else if(width & BYTES_ACCESS_1)
+	} else if((width & BYTES_ACCESS_1) == BYTES_ACCESS_1)
 	{
 		unsigned char *addr_p = (unsigned char *)addr;
+		print_debug("8-bit access\n");
 		value = *addr_p;
+	} else {
+		printf("ERROR: width != 8/16/32 bits");
 	}
-	printf("ERROR: width != 8/16/32 bits");
 	return value;
 }
 
@@ -139,10 +155,14 @@ static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int r
 	unsigned int value;
 	unsigned int width;
 
-	/* loopback */
-//	printf("%s", rxbuf);
-	printf("magic: 0x%08x\n", packet->magic);
-	printf("version: 0x%1x\n", packet->version);
+	print_debug("Received packet!\n");
+	print_debug("magic: 0x%04x\n", packet->magic);
+	print_debug("version: 0x%1x\n", packet->version);
+	print_debug("addr_size: 0x%1X\n", packet->addr_size);
+	print_debug("port_size: 0x%1X\n", packet->port_size);
+	print_debug("byte enable: 0x%02X\n", packet->record_hdr.byte_enable);
+	print_debug("wcount: 0x%02X\n", packet->record_hdr.wcount);
+	print_debug("rcount: 0x%02X\n", packet->record_hdr.rcount);
 	if(packet->addr_size != 4)
 	{
 		printf("ERROR: bus address width != 32 bits\n");
@@ -163,7 +183,7 @@ static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int r
 
 	if(packet->record_hdr.wcount > 0)
 	{
-		printf("Writing: ");
+		print_debug("Writing: \n");
 		if(packet->record_hdr.wcount > 1)
 			printf("ERROR: only 1 write per packet supported\n");
 		addr = packet->record.base_write_addr;
@@ -176,15 +196,30 @@ static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int r
 	if(packet->record_hdr.rcount > 0)
 	{
 		unsigned int val;
-		printf("Reading: ");
+		print_debug("Reading: ");
 		if (packet->record_hdr.rcount > 1)
 			printf("ERROR: only 1 read per packet supported\n");
 		addr = packet->record.read_addr;
 		width = packet->record_hdr.byte_enable;
 
 		val = do_wishbone_read(addr, width);
+		print_debug("READ result: 0x%08x\n", val);
+		struct etherbone_packet *tx_packet = (struct etherbone_packet *)uip_tcp_tx_buf0;
+		tx_packet->magic = 0x4e6f;
+		tx_packet->version = 1;
+		tx_packet->nr = 1;
+		tx_packet->pr = 0;
+		tx_packet->pf = 0;
+		tx_packet->addr_size = 4; // 32 bits
+		tx_packet->port_size = 4; // 32 bits
+		tx_packet->record_hdr.wcount = 1;
+		tx_packet->record_hdr.rcount = 0;
+		tx_packet->record.base_write_addr = addr;
+		tx_packet->record.write_value = val;
+		print_debug("sending size: %d\n", sizeof(*tx_packet));
+		tcp_socket_send(&uip_tcp_socket0, uip_tcp_tx_buf0, sizeof(*tx_packet));
 	}
-//	tcp_socket_send_str(&uip_tcp_socket0, rxbuf);
+
 	return 0;
 }
 
