@@ -56,4 +56,4 @@ struct etherbone_packet {
 unsigned int get_increment(unsigned int width);
 void do_wishbone_write(unsigned int addr, unsigned int value, unsigned int width);
 unsigned int do_wishbone_read(unsigned int addr, unsigned int width);
-int handle_etherbone_packet(struct tcp_socket *s, const char *rxbuf, int rxlen);
+int handle_etherbone_packet(struct tcp_socket *s, unsigned char *rxbuf);

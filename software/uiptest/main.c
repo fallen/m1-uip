@@ -21,6 +21,8 @@
 #define UIP_TCP_BUFFER_SIZE_RX 1500 /* XXX */
 #define UIP_TCP_BUFFER_SIZE_TX 1500 /* XXX */
 
+#define max(a,b) ((a>b)?a:b)
+#define min(a,b) ((a<b)?a:b)
 
 static int uip_periodic_event;
 static int uip_periodic_period;
@@ -90,7 +92,42 @@ void uip_log(char *msg){
 
 static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int rxlen)
 {
-	return handle_etherbone_packet(s, rxbuf, rxlen);
+	static unsigned char buff[1024];
+	struct etherbone_packet *pbuff = (struct etherbone_packet *)buff;
+	struct etherbone_packet *p = (struct etherbone_packet *)rxbuf;
+	static unsigned int copied_size = 0;
+
+	printf("uip_tcp_rx0\n\n");
+
+	if(copied_size == 0)
+	{
+		while (p->magic != 0x4e6f)
+		{
+			p = (struct etherbone_packet *)(++rxbuf);
+			rxlen--;
+			if(rxlen == 0)
+				return 0;
+		}
+	}
+
+	while(rxlen > 0)
+	{
+		unsigned int count, size_to_copy;
+		count = max(p->record_hdr.rcount, p->record_hdr.wcount);
+		size_to_copy = min(rxlen, sizeof(*p) + sizeof(struct etherbone_record) * count - copied_size);
+		memcpy(buff + copied_size, p, size_to_copy);
+		copied_size += size_to_copy;
+		rxlen -= size_to_copy;
+		rxbuf += size_to_copy;
+		if(copied_size == sizeof(*p) + sizeof(struct etherbone_record) * count)
+		{
+			handle_etherbone_packet(s, buff);
+			p = rxbuf;
+			copied_size = 0;
+		}
+	}
+
+	return 0;
 }
 
 static void uip_tcp_event0(struct tcp_socket *s, void *ptr, tcp_socket_event_t event)

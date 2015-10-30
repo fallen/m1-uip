@@ -67,7 +67,7 @@ unsigned int do_wishbone_read(unsigned int addr, unsigned int width)
 	return value;
 }
 
-int handle_etherbone_packet(struct tcp_socket *s, const char *rxbuf, int rxlen)
+int handle_etherbone_packet(struct tcp_socket *s, unsigned char *rxbuf)
 {
 	struct etherbone_packet *packet = (struct etherbone_packet *)rxbuf;
 	unsigned int addr;
