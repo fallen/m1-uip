@@ -1,7 +1,7 @@
 #include "contiki.h"
 #include "contiki-net.h"
 
-#define ETHERBONE_DEBUG
+//#define ETHERBONE_DEBUG
 
 #ifdef ETHERBONE_DEBUG
 	#define print_debug(...) printf(__VA_ARGS__)

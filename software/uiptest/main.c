@@ -92,16 +92,14 @@ void uip_log(char *msg){
 
 static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int rxlen)
 {
-	static unsigned char buff[1024];
+	static unsigned char buff[10240];
 	struct etherbone_packet *pbuff = (struct etherbone_packet *)buff;
 	struct etherbone_packet *p = (struct etherbone_packet *)rxbuf;
-	static unsigned int copied_size = 0;
-
-	printf("uip_tcp_rx0\n\n");
+	static unsigned int copied_size = 0, header_copied = 0;
 
 	if(copied_size == 0)
 	{
-		while (p->magic != 0x4e6f)
+		while(p->magic != 0x4e6f)
 		{
 			p = (struct etherbone_packet *)(++rxbuf);
 			rxlen--;
@@ -113,7 +111,25 @@ static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int r
 	while(rxlen > 0)
 	{
 		unsigned int count, size_to_copy;
-		count = max(p->record_hdr.rcount, p->record_hdr.wcount);
+
+		/* first, make sure we have en entire header
+		 * in order to access rcount and wcount
+		 */
+		if(!header_copied)
+		{
+			size_to_copy = min(rxlen, sizeof(*p) - copied_size);
+			memcpy(buff + copied_size, p, size_to_copy);
+			copied_size += size_to_copy;
+			rxbuf += copied_size;
+			rxlen -= copied_size;
+			p = rxbuf;
+			if(copied_size < sizeof(*p))
+				return 0;
+		}
+		header_copied = 1;
+
+		/* now, we can fetch the remaining part */
+		count = max(pbuff->record_hdr.rcount, pbuff->record_hdr.wcount);
 		size_to_copy = min(rxlen, sizeof(*p) + sizeof(struct etherbone_record) * count - copied_size);
 		memcpy(buff + copied_size, p, size_to_copy);
 		copied_size += size_to_copy;
@@ -122,6 +138,7 @@ static int uip_tcp_rx0(struct tcp_socket *s, void *ptr, const char *rxbuf, int r
 		if(copied_size == sizeof(*p) + sizeof(struct etherbone_record) * count)
 		{
 			handle_etherbone_packet(s, buff);
+			header_copied = 0;
 			p = rxbuf;
 			copied_size = 0;
 		}

@@ -4,6 +4,8 @@ import struct
 
 from liteeth.software.etherbone import *
 
+ETHERBONE_HEADER_SIZE = 12
+
 
 def get_argparser():
     parser = argparse.ArgumentParser(description="Remote wishbone access tool")
@@ -18,7 +20,9 @@ def get_argparser():
                         help="Host to connect to")
     parser.add_argument("-p", "--port", default=80,
                         help="Port to connect to")
-    parser.add_argument("-f", "--file", nargs=2, metavar=("ADDR", "FILENAME"),
+    parser.add_argument("-u", "--upload", nargs=2, metavar=("ADDR", "FILENAME"),
+                        help="Write a file content to memory")
+    parser.add_argument("-d", "--download", nargs=3, metavar=("ADDR", "SIZE", "FILENAME"),
                         help="Write a file content to memory")
     return parser
 
@@ -43,6 +47,22 @@ def make_byte_enable(width):
         raise ValueError("Width is supposed to be either 32 or 16 or 8.")
 
 
+def receive_etherbone_packet(s):
+    packet = bytes()
+    while len(packet) < ETHERBONE_HEADER_SIZE:
+        packet += s.recv(ETHERBONE_HEADER_SIZE - len(packet))
+
+    wcount, rcount = struct.unpack(">BB", packet[-2:])
+
+    counts = wcount + rcount
+
+    packet_size = ETHERBONE_HEADER_SIZE + 4*(counts + 1)
+    while len(packet) < packet_size:
+        packet += s.recv(packet_size - len(packet))
+
+    return packet
+
+
 def send_reads(s, addresses, width):
     packet = EtherbonePacket()
     record = EtherboneRecord()
@@ -61,7 +81,8 @@ def send_reads(s, addresses, width):
     packet.records = [record]
     packet.encode()
     s.send(bytes(packet))
-    answer = s.recv(1024)
+
+    answer = receive_etherbone_packet(s)
     answer_packet = EtherbonePacket(init=[b for b in answer])
     answer_packet.decode()
     return answer_packet
@@ -87,6 +108,7 @@ def send_writes(s, address, width, values):
     packet.encode()
     s.send(bytes(packet))
 
+
 def main():
     args = get_argparser().parse_args()
 
@@ -108,14 +130,14 @@ def main():
         value = string_to_int(value)
         width = int(width)
         send_writes(s, addr, width, [value])
-    elif args.file:
-        addr, filename = args.file
+    elif args.upload:
+        addr, filename = args.upload
         addr = string_to_int(addr)
         with open(filename, "rb") as file:
             content = file.read()
             size = len(content)
             while size >= 4:
-                num_writes = min(25, size//4)
+                num_writes = min(100, size//4)
                 values = struct.unpack(">"+"I"*num_writes, content[:4*num_writes])
                 send_writes(s, addr, 32, values)
                 content = content[4*num_writes:]
@@ -123,6 +145,24 @@ def main():
                 addr += 4*num_writes
             for b in content:
                 send_writes(s, addr, 8, [b])
+                addr += 1
+    elif args.download:
+        addr, size, filename = args.download
+        size = string_to_int(size)
+        addr = string_to_int(addr)
+        with open(filename, "wb") as file:
+            while size >= 4:
+                num_reads = min(100, size//4)
+                addresses = range(addr, addr + 4*num_reads, 4)
+                p = send_reads(s, addresses, 32)
+                for w in p.records[0].writes.writes:
+                    file.write(struct.pack(">I", w.data))
+                addr += 4*num_reads
+                size -= 4*num_reads
+            for i in range(size):
+                p = send_reads(s, [addr], 8)
+                file.write(p.records[0].writes.writes[0].data)
+                addr += 1
 
 if __name__ == "__main__":
     main()
