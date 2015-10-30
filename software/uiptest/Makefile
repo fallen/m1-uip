@@ -7,7 +7,7 @@ CFLAGS += $(CPPFLAGS) -I. \
 	-I$(UIPDIR) \
 	-I$(LIBUIPDIR)
 
-OBJECTS=isr.o main.o
+OBJECTS=isr.o main.o etherbone.o
 
 all: uiptest.bin
 

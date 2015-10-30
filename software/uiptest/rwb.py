@@ -1,5 +1,6 @@
 import argparse
 import socket
+import struct
 
 from liteeth.software.etherbone import *
 
@@ -11,10 +12,14 @@ def get_argparser():
     parser.add_argument("-w", "--write", nargs=3,
                         metavar=("ADDR", "VALUE", "WIDTH"),
                         help="Write some value to an address on wishbone bus")
+    parser.add_argument("-n", "--num", type=int, default=1,
+                        help="Number of sequential reads")
     parser.add_argument("--host", required=True,
                         help="Host to connect to")
     parser.add_argument("-p", "--port", default=80,
                         help="Port to connect to")
+    parser.add_argument("-f", "--file", nargs=2, metavar=("ADDR", "FILENAME"),
+                        help="Write a file content to memory")
     return parser
 
 
@@ -38,6 +43,50 @@ def make_byte_enable(width):
         raise ValueError("Width is supposed to be either 32 or 16 or 8.")
 
 
+def send_reads(s, addresses, width):
+    packet = EtherbonePacket()
+    record = EtherboneRecord()
+    reads = EtherboneReads(addrs=addresses)
+    record.writes = None
+    record.reads = reads
+    record.bca = 0
+    record.rca = 0
+    record.rff = 0
+    record.cyc = 0
+    record.wca = 0
+    record.wff = 0
+    record.byte_enable = make_byte_enable(width)
+    record.wcount = 0
+    record.rcount = len(addresses)
+    packet.records = [record]
+    packet.encode()
+    s.send(bytes(packet))
+    answer = s.recv(1024)
+    answer_packet = EtherbonePacket(init=[b for b in answer])
+    answer_packet.decode()
+    return answer_packet
+
+
+def send_writes(s, address, width, values):
+    packet = EtherbonePacket()
+    record = EtherboneRecord()
+    writes = EtherboneWrites(base_addr=address,
+                             datas=values)
+    record.writes = writes
+    record.reads = None
+    record.bca = 0
+    record.rca = 0
+    record.rff = 0
+    record.cyc = 0
+    record.wca = 0
+    record.wff = 0
+    record.byte_enable = make_byte_enable(width)
+    record.wcount = len(values)
+    record.rcount = 0
+    packet.records = [record]
+    packet.encode()
+    s.send(bytes(packet))
+
 def main():
     args = get_argparser().parse_args()
 
@@ -45,48 +94,35 @@ def main():
     s.connect((args.host, args.port))
 
     if args.read:
-        packet = EtherbonePacket()
-        record = EtherboneRecord()
-        reads = EtherboneReads(addrs=[string_to_int(args.read[0])])
-        record.writes = None
-        record.reads = reads
-        record.bca = 0
-        record.rca = 0
-        record.rff = 0
-        record.cyc = 0
-        record.wca = 0
-        record.wff = 0
-        record.byte_enable = make_byte_enable(int(args.read[1]))
-        record.wcount = 0
-        record.rcount = 1
-        packet.records = [record]
-        packet.encode()
-        s.send(bytes(packet))
-        answer = s.recv(1024)
-        answer_packet = EtherbonePacket(init=[b for b in answer])
-        answer_packet.decode()
-        print("0x{:08x}"
-              .format(answer_packet.records[0].writes.writes[0].data))
+        addr, width = args.read
+        addr = string_to_int(addr)
+        width = int(width)
+        addresses = range(addr, addr + args.num * (width//8), width//8)
+        answer = send_reads(s, addresses, width)
+        for w, addr in zip(answer.records[0].writes.writes, addresses):
+            print("0x{:08x}: 0x{:08x}"
+                  .format(addr, w.data))
     elif args.write:
-        packet = EtherbonePacket()
-        record = EtherboneRecord()
-        writes = EtherboneWrites(base_addr=string_to_int(args.write[0]),
-                                 datas=[string_to_int(args.write[1])])
-        record.writes = writes
-        record.reads = None
-        record.bca = 0
-        record.rca = 0
-        record.rff = 0
-        record.cyc = 0
-        record.wca = 0
-        record.wff = 0
-        record.byte_enable = make_byte_enable(int(args.write[2]))
-        record.wcount = 1
-        record.rcount = 0
-        packet.records = [record]
-        packet.encode()
-        s.send(bytes(packet))
-
+        addr, value, width = args.write
+        addr = string_to_int(addr)
+        value = string_to_int(value)
+        width = int(width)
+        send_writes(s, addr, width, [value])
+    elif args.file:
+        addr, filename = args.file
+        addr = string_to_int(addr)
+        with open(filename, "rb") as file:
+            content = file.read()
+            size = len(content)
+            while size >= 4:
+                num_writes = min(25, size//4)
+                values = struct.unpack(">"+"I"*num_writes, content[:4*num_writes])
+                send_writes(s, addr, 32, values)
+                content = content[4*num_writes:]
+                size -= 4*num_writes
+                addr += 4*num_writes
+            for b in content:
+                send_writes(s, addr, 8, [b])
 
 if __name__ == "__main__":
     main()
